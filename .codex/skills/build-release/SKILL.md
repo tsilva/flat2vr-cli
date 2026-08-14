@@ -1,6 +1,6 @@
 ---
 name: build-release
-description: Build, audit, smoke-test, publish, monitor, or verify flat2vr Python releases. Use when the user invokes $build-release or /build-release; asks for local release artifacts or a release candidate; requests a version bump, tag, PyPI publication, or GitHub Release; or asks whether an exact flat2vr version is live.
+description: Build, audit, smoke-test, publish, monitor, or verify flat2vr-cli Python distribution releases. Use when the user invokes $build-release or /build-release; asks for local release artifacts or a release candidate; requests a version bump, tag, PyPI publication, or GitHub Release; or asks whether an exact flat2vr-cli version is live.
 ---
 
 # Build Release
@@ -20,7 +20,7 @@ next unused patch version; increment an existing `aN`, `bN`, `rcN`, or `.devN`
 suffix instead. Honor an exact unused version requested by the user.
 
 Keep the version identical in `pyproject.toml`, `src/flat2vr/__init__.py`, and
-the root `flat2vr` entry in `uv.lock`.
+the root `flat2vr-cli` entry in `uv.lock`.
 
 ## Build a local candidate
 
@@ -54,8 +54,8 @@ python3 .codex/skills/build-release/scripts/release_build.py build \
   --version <version> --out-dir dist/release-v<version>
 ```
 
-The helper requires exactly `flat2vr-<version>-py3-none-any.whl` and
-`flat2vr-<version>.tar.gz`. It audits metadata, the console entry point, all
+The helper requires exactly `flat2vr_cli-<version>-py3-none-any.whl` and
+`flat2vr_cli-<version>.tar.gz`. It audits metadata, the console entry point, all
 bundled Docker/container/model-lock resources, contamination, filenames, and
 the sdist layout. It then installs the wheel without dependencies into an
 isolated environment, invokes the CLI, verifies the default backend, checks the
@@ -73,7 +73,7 @@ Require all of the following before tagging:
 - consistent version metadata and an unused PyPI version and tag;
 - a passing local candidate built from the exact commit to tag;
 - `.github/workflows/release.yml` matching the contract below; and
-- a PyPI Trusted Publisher for owner `tsilva`, repository `flat2vr`, workflow
+- a PyPI Trusted Publisher for owner `tsilva`, repository `flat2vr-cli`, workflow
   `release.yml`, and GitHub environment `pypi`.
 
 Do not create or switch branches, move an existing tag, manually upload with
@@ -145,6 +145,6 @@ GitHub Release exists for the tag.
 
 For a local candidate, lead with the artifact directory and report both files,
 SHA-256 digests, version, and gates. For publication, lead with
-`https://pypi.org/project/flat2vr/<version>/` and report the tag, commit,
+`https://pypi.org/project/flat2vr-cli/<version>/` and report the tag, commit,
 workflow URL and conclusion, GitHub Release URL, and both distribution names.
 On failure, report the exact command or job and the next safe recovery action.

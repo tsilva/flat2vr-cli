@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Prepare, build, audit, smoke-test, and verify flat2vr releases."""
+"""Prepare, build, audit, smoke-test, and verify flat2vr-cli releases."""
 
 from __future__ import annotations
 
@@ -24,7 +24,8 @@ from pathlib import Path, PurePosixPath
 
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
-PACKAGE_NAME = "flat2vr"
+PACKAGE_NAME = "flat2vr-cli"
+PACKAGE_FILENAME = "flat2vr_cli"
 IMPORT_NAME = "flat2vr"
 ENTRY_POINT = "flat2vr = flat2vr.cli:main"
 VERSION_PATTERN = re.compile(
@@ -153,7 +154,7 @@ def fetch_pypi() -> dict[str, object]:
         f"https://pypi.org/pypi/{PACKAGE_NAME}/json",
         headers={
             "Accept": "application/json",
-            "User-Agent": "flat2vr-release-check",
+            "User-Agent": "flat2vr-cli-release-check",
         },
     )
     try:
@@ -317,8 +318,8 @@ def contaminated(member_name: str) -> bool:
 
 def expected_names(version: str) -> tuple[str, str]:
     return (
-        f"{PACKAGE_NAME}-{version}-py3-none-any.whl",
-        f"{PACKAGE_NAME}-{version}.tar.gz",
+        f"{PACKAGE_FILENAME}-{version}-py3-none-any.whl",
+        f"{PACKAGE_FILENAME}-{version}.tar.gz",
     )
 
 
@@ -357,7 +358,7 @@ def audit_sdist(path: Path, version: str) -> dict[str, object]:
     _, expected_sdist = expected_names(version)
     if path.name != expected_sdist:
         raise SystemExit(f"expected sdist {expected_sdist}, got {path.name}")
-    prefix = f"{PACKAGE_NAME}-{version}/"
+    prefix = f"{PACKAGE_FILENAME}-{version}/"
     with tarfile.open(path, "r:gz") as archive:
         names = [member.name for member in archive.getmembers() if member.isfile()]
     required = {
@@ -411,7 +412,7 @@ import flat2vr
 from flat2vr.cli import build_parser
 from flat2vr.resources import container_context
 
-assert flat2vr.__version__ == metadata.version("flat2vr") == __import__("sys").argv[1]
+assert flat2vr.__version__ == metadata.version("flat2vr-cli") == __import__("sys").argv[1]
 entry_points = [
     entry
     for entry in metadata.entry_points(group="console_scripts")

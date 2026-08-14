@@ -9,6 +9,9 @@ ordinary 2D footage into stereoscopic Full Side-by-Side video for headsets such
 as Meta Quest 3. Point it at a video and run the conversion on an NVIDIA Docker
 host or Modal; it returns an HEVC `.mp4` with the source audio retained.
 
+The Python distribution is named `flat2vr-cli`; it installs the `flat2vr`
+command and `flat2vr` import package.
+
 The lightweight client stays local. CUDA, FFmpeg, DepthCrafter depth estimation,
 and M2SVid view synthesis run inside the same pinned GPU container on either
 backend.
@@ -19,8 +22,8 @@ flat2vr requires Python 3.11 or newer and uses
 [uv](https://docs.astral.sh/uv/) for its local environment.
 
 ```bash
-git clone https://github.com/tsilva/flat2vr.git
-cd flat2vr
+git clone https://github.com/tsilva/flat2vr-cli.git
+cd flat2vr-cli
 uv sync
 ```
 

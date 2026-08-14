@@ -273,8 +273,8 @@ wheels = [
 ]
 
 [[package]]
-name = "flat2vr"
-version = "0.1.0"
+name = "flat2vr-cli"
+version = "0.1.1"
 source = { editable = "." }
 
 [package.optional-dependencies]

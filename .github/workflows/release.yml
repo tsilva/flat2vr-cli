@@ -44,7 +44,7 @@ jobs:
       - name: Set up uv
         uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
         with:
-          version: "0.11.21"
+          version: "0.11.13"
 
       - name: Install locked environment
         run: uv sync --frozen
@@ -104,7 +104,7 @@ jobs:
     runs-on: ubuntu-24.04
     environment:
       name: pypi
-      url: https://pypi.org/p/flat2vr
+      url: https://pypi.org/p/flat2vr-cli
     permissions:
       id-token: write
     steps:
