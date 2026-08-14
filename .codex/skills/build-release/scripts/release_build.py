@@ -320,9 +320,11 @@ def source_gates() -> None:
     uv = shutil.which("uv")
     if uv is None:
         raise SystemExit("uv is required for release source gates")
-    with tempfile.TemporaryDirectory(prefix="flat2vr-release-uv-config-") as config:
+    with tempfile.TemporaryDirectory(prefix="flat2vr-release-uv-") as temporary:
+        root = Path(temporary)
         env = os.environ.copy()
-        env["XDG_CONFIG_HOME"] = config
+        env["XDG_CONFIG_HOME"] = str(root / "config")
+        env["UV_CACHE_DIR"] = str(root / "cache")
         for command in (
             [uv, "lock", "--check"],
             [uv, "sync", "--frozen"],
@@ -494,17 +496,23 @@ def build(version: str, out_dir: Path) -> None:
     if output.exists():
         raise SystemExit(f"release output already exists: {output}")
     output.parent.mkdir(parents=True, exist_ok=True)
-    run(
-        [
-            "uv",
-            "build",
-            "--no-sources",
-            "--no-create-gitignore",
-            "--out-dir",
-            str(output),
-        ],
-        cwd=REPO_ROOT,
-    )
+    with tempfile.TemporaryDirectory(prefix="flat2vr-release-build-") as temporary:
+        root = Path(temporary)
+        env = os.environ.copy()
+        env["XDG_CONFIG_HOME"] = str(root / "config")
+        env["UV_CACHE_DIR"] = str(root / "cache")
+        run(
+            [
+                "uv",
+                "build",
+                "--no-sources",
+                "--no-create-gitignore",
+                "--out-dir",
+                str(output),
+            ],
+            cwd=REPO_ROOT,
+            env=env,
+        )
     audit_directory(output, version)
 
 
