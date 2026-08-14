@@ -54,9 +54,13 @@ REQUIRED_WHEEL_FILES = {
     "flat2vr/__init__.py",
     "flat2vr/__main__.py",
     "flat2vr/cli.py",
+    "flat2vr/configuration.py",
     "flat2vr/docker_backend.py",
+    "flat2vr/modal_app.py",
     "flat2vr/modal_backend.py",
+    "flat2vr/modal_contract.py",
     "flat2vr/options.py",
+    "flat2vr/process.py",
     "flat2vr/resources.py",
     "flat2vr/container/Dockerfile",
     "flat2vr/container/bin/convert",
@@ -342,6 +346,8 @@ def source_gates() -> None:
                 "-v",
             ],
             [uv, "run", "--frozen", "flat2vr", "--help"],
+            [uv, "run", "--frozen", "flat2vr", "--help-advanced"],
+            [uv, "run", "--frozen", "flat2vr", "setup", "--help"],
         ):
             run(command, cwd=REPO_ROOT, env=env)
 
@@ -454,7 +460,9 @@ entry_points = [
     if entry.name == "flat2vr"
 ]
 assert len(entry_points) == 1 and entry_points[0].value == "flat2vr.cli:main"
-assert build_parser().parse_args(["convert", "input.mp4"]).backend == "docker"
+parsed = build_parser().parse_args(["input.mp4"])
+assert str(parsed.input) == "input.mp4"
+assert parsed.preset == "balanced" and parsed.strength == "normal"
 context = container_context()
 for relative in (
     "Dockerfile",
@@ -468,6 +476,8 @@ for relative in (
         run([str(python), "-c", code, version], cwd=Path(temporary))
         script = env_dir / ("Scripts/flat2vr.exe" if os.name == "nt" else "bin/flat2vr")
         run([str(script), "--help"], cwd=Path(temporary))
+        run([str(script), "--help-advanced"], cwd=Path(temporary))
+        run([str(script), "setup", "--help"], cwd=Path(temporary))
 
 
 def sha256(path: Path) -> str:

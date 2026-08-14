@@ -1,4 +1,4 @@
-"""Modal deployment definition used by ``flat2vr modal deploy``."""
+"""Modal deployment definition managed by ``flat2vr setup``."""
 
 from __future__ import annotations
 
@@ -9,25 +9,27 @@ import uuid
 
 import modal
 
+from flat2vr.modal_contract import (
+    APP_NAME,
+    DEFAULT_GPU,
+    JOBS_VOLUME,
+    MODEL_VOLUME,
+    deployment_tags,
+)
 from flat2vr.options import ConversionOptions
 from flat2vr.resources import container_context
 
 
-APP_NAME = os.environ.get("FLAT2VR_MODAL_APP", "flat2vr")
-MODEL_VOLUME_NAME = os.environ.get(
-    "FLAT2VR_MODAL_MODEL_VOLUME", "flat2vr-models"
-)
-JOBS_VOLUME_NAME = os.environ.get("FLAT2VR_MODAL_JOBS_VOLUME", "flat2vr-jobs")
-GPU = os.environ.get("FLAT2VR_MODAL_GPU", "L40S")
+GPU = os.environ.get("FLAT2VR_MODAL_GPU", DEFAULT_GPU)
 
-app = modal.App(APP_NAME)
+app = modal.App(APP_NAME, tags=deployment_tags(gpu=GPU))
 image = modal.Image.from_dockerfile(
     container_context() / "Dockerfile",
     context_dir=container_context(),
     add_python="3.11",
 )
-models = modal.Volume.from_name(MODEL_VOLUME_NAME, create_if_missing=True)
-jobs = modal.Volume.from_name(JOBS_VOLUME_NAME, create_if_missing=True)
+models = modal.Volume.from_name(MODEL_VOLUME, create_if_missing=True)
+jobs = modal.Volume.from_name(JOBS_VOLUME, create_if_missing=True)
 
 
 @app.function(
@@ -36,11 +38,11 @@ jobs = modal.Volume.from_name(JOBS_VOLUME_NAME, create_if_missing=True)
     timeout=6 * 60 * 60,
     volumes={"/models": models, "/jobs": jobs},
 )
-def convert(job_id: str, raw_options: dict[str, object]) -> dict[str, object]:
+def convert(job_id: str, request: dict[str, object]) -> dict[str, object]:
     parsed = uuid.UUID(job_id)
     if parsed.hex != job_id:
         raise ValueError("invalid job id")
-    options = ConversionOptions.from_dict(raw_options)
+    options, verbose, keep_work = ConversionOptions.from_request(request)
 
     job_root = Path("/jobs") / job_id
     inputs = [path for path in (job_root / "input").iterdir() if path.is_file()]
@@ -64,6 +66,10 @@ def convert(job_id: str, raw_options: dict[str, object]) -> dict[str, object]:
         str(output),
         *options.container_args(),
     ]
+    if keep_work:
+        command.append("--keep-work")
+    if verbose:
+        command.append("--verbose")
     subprocess.run(command, check=True, env=environment)
     models.commit()
     jobs.commit()

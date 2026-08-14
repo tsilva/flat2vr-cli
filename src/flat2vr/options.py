@@ -1,9 +1,22 @@
-"""Shared conversion options for all execution backends."""
+"""Authoritative conversion settings shared by every execution backend."""
 
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 from pathlib import Path
+
+
+PROTOCOL_VERSION = 1
+PRESETS: dict[str, dict[str, int]] = {
+    "fast": {"depth_steps": 1, "output_height": 720, "quality": 23},
+    "balanced": {"depth_steps": 5, "output_height": 1024, "quality": 19},
+    "best": {"depth_steps": 5, "output_height": 1024, "quality": 17},
+}
+STRENGTHS: dict[str, float] = {
+    "subtle": 0.03,
+    "normal": 0.05,
+    "strong": 0.07,
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -18,7 +31,58 @@ class ConversionOptions:
     quality: int = 19
     encoder: str = "auto"
 
+    @classmethod
+    def from_profile(
+        cls,
+        *,
+        preset: str = "balanced",
+        strength: str = "normal",
+        overrides: dict[str, object] | None = None,
+    ) -> "ConversionOptions":
+        if preset not in PRESETS:
+            raise ValueError(f"unknown preset: {preset}")
+        if strength not in STRENGTHS:
+            raise ValueError(f"unknown strength: {strength}")
+        values: dict[str, object] = asdict(cls())
+        values.update(PRESETS[preset])
+        values["disparity"] = STRENGTHS[strength]
+        if overrides:
+            unknown = sorted(set(overrides) - set(values))
+            if unknown:
+                raise ValueError(f"unknown conversion overrides: {', '.join(unknown)}")
+            values.update(
+                (name, value) for name, value in overrides.items() if value is not None
+            )
+        result = cls(**values)  # type: ignore[arg-type]
+        result.validate()
+        return result
+
     def validate(self) -> None:
+        integer_fields = {
+            "fps": self.fps,
+            "width": self.width,
+            "height": self.height,
+            "output height": self.output_height,
+            "window frames": self.window_frames,
+            "depth steps": self.depth_steps,
+            "quality": self.quality,
+        }
+        invalid_integer = next(
+            (
+                name
+                for name, value in integer_fields.items()
+                if not isinstance(value, int) or isinstance(value, bool)
+            ),
+            None,
+        )
+        if invalid_integer:
+            raise ValueError(f"{invalid_integer} must be an integer")
+        if not isinstance(self.disparity, (int, float)) or isinstance(
+            self.disparity, bool
+        ):
+            raise ValueError("disparity must be a number")
+        if not isinstance(self.encoder, str):
+            raise ValueError("encoder must be a string")
         if self.fps not in (24, 25, 30):
             raise ValueError("fps must be one of 24, 25, or 30")
         if self.width <= 0 or self.width % 64:
@@ -42,6 +106,21 @@ class ConversionOptions:
         self.validate()
         return asdict(self)
 
+    def to_request(
+        self,
+        *,
+        verbose: bool = False,
+        keep_work: bool = False,
+    ) -> dict[str, object]:
+        if not isinstance(verbose, bool) or not isinstance(keep_work, bool):
+            raise ValueError("runtime options must be booleans")
+        return {
+            "protocol": PROTOCOL_VERSION,
+            "options": self.to_dict(),
+            "verbose": verbose,
+            "keep_work": keep_work,
+        }
+
     @classmethod
     def from_dict(cls, value: dict[str, object]) -> "ConversionOptions":
         allowed = {field.name for field in cls.__dataclass_fields__.values()}
@@ -51,6 +130,29 @@ class ConversionOptions:
         result = cls(**value)  # type: ignore[arg-type]
         result.validate()
         return result
+
+    @classmethod
+    def from_request(
+        cls,
+        value: dict[str, object],
+    ) -> tuple["ConversionOptions", bool, bool]:
+        allowed = {"protocol", "options", "verbose", "keep_work"}
+        unknown = sorted(set(value) - allowed)
+        if unknown:
+            raise ValueError(f"unknown request fields: {', '.join(unknown)}")
+        if value.get("protocol") != PROTOCOL_VERSION:
+            raise ValueError(
+                f"unsupported conversion protocol: {value.get('protocol')!r}; "
+                f"expected {PROTOCOL_VERSION}"
+            )
+        raw_options = value.get("options")
+        if not isinstance(raw_options, dict):
+            raise ValueError("request options must be an object")
+        verbose = value.get("verbose", False)
+        keep_work = value.get("keep_work", False)
+        if not isinstance(verbose, bool) or not isinstance(keep_work, bool):
+            raise ValueError("request runtime options must be booleans")
+        return cls.from_dict(raw_options), verbose, keep_work
 
     def container_args(self) -> list[str]:
         self.validate()

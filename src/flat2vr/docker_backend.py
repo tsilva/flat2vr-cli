@@ -64,7 +64,7 @@ class DockerBackend:
         command.extend(arguments)
         return command
 
-    def doctor(self) -> None:
+    def doctor(self, *, verbose: bool = False) -> None:
         result = run(
             self.command(
                 "version",
@@ -72,8 +72,9 @@ class DockerBackend:
                 "client={{.Client.Version}} server={{.Server.Version}}",
             ),
             capture_output=True,
+            verbose=verbose,
         )
-        print(result.stdout.strip())
+        version = result.stdout.strip()
         info = run(
             self.command(
                 "info",
@@ -82,18 +83,21 @@ class DockerBackend:
                 "{{$name}} {{end}}default={{.DefaultRuntime}}",
             ),
             capture_output=True,
+            verbose=verbose,
         )
-        print(info.stdout.strip())
+        print(f"Docker ready: {version}; {info.stdout.strip()}")
 
-    def image_exists(self) -> bool:
+    def image_exists(self, *, verbose: bool = False) -> bool:
         result = run(
             self.command("image", "inspect", self.image),
             capture_output=True,
             check=False,
+            verbose=verbose,
         )
         return result.returncode == 0
 
-    def build(self, *, rebuild: bool = False) -> None:
+    def build(self, *, rebuild: bool = False, verbose: bool = False) -> None:
+        print("Building the Flat2VR GPU image...", flush=True)
         context = container_context()
         with tempfile.TemporaryFile() as archive_file:
             # Legacy Docker builders do not recognize POSIX PAX headers as a
@@ -115,7 +119,15 @@ class DockerBackend:
             if rebuild:
                 arguments.append("--no-cache")
             arguments.append("-")
-            run(self.command(*arguments), stdin=archive_file)
+            run(self.command(*arguments), stdin=archive_file, verbose=verbose)
+
+    def setup(self, *, rebuild: bool = False, verbose: bool = False) -> None:
+        print("Checking Docker...", flush=True)
+        self.doctor(verbose=verbose)
+        if rebuild or not self.image_exists(verbose=verbose):
+            self.build(rebuild=rebuild, verbose=verbose)
+        else:
+            print(f"Flat2VR image ready: {self.image}")
 
     def convert(
         self,
@@ -124,7 +136,8 @@ class DockerBackend:
         options: ConversionOptions,
         *,
         rebuild: bool = False,
-        keep_container: bool = False,
+        keep_work: bool = False,
+        verbose: bool = False,
     ) -> None:
         options.validate()
         input_path = input_path.expanduser().resolve()
@@ -133,11 +146,15 @@ class DockerBackend:
             raise FileNotFoundError(f"input video does not exist: {input_path}")
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
-        if rebuild or not self.image_exists():
-            self.build(rebuild=rebuild)
+        if rebuild or not self.image_exists(verbose=verbose):
+            self.build(rebuild=rebuild, verbose=verbose)
 
         if not self.model_path:
-            run(self.command("volume", "create", self.model_volume), capture_output=True)
+            run(
+                self.command("volume", "create", self.model_volume),
+                capture_output=True,
+                verbose=verbose,
+            )
 
         job_id = uuid.uuid4().hex
         container_name = f"flat2vr-{job_id}"
@@ -151,6 +168,17 @@ class DockerBackend:
             model_mount = f"type=bind,src={self.model_path},dst=/models"
         else:
             model_mount = f"type=volume,src={self.model_volume},dst=/models"
+
+        container_arguments = [
+            "/opt/flat2vr/bin/convert",
+            container_input,
+            container_output,
+            *options.container_args(),
+        ]
+        if keep_work:
+            container_arguments.append("--keep-work")
+        if verbose:
+            container_arguments.append("--verbose")
 
         create = self.command(
             "create",
@@ -171,30 +199,52 @@ class DockerBackend:
             "--env",
             "NVIDIA_DRIVER_CAPABILITIES=compute,utility,video",
             self.image,
-            "/opt/flat2vr/bin/convert",
-            container_input,
-            container_output,
-            *options.container_args(),
+            *container_arguments,
         )
 
         created = False
         try:
-            run(create, capture_output=True)
+            run(create, capture_output=True, verbose=verbose)
             created = True
-            self._copy_input(input_path, container_name, suffix)
-            run(self.command("start", "--attach", container_name))
-            self._copy_output(container_name, container_output, output_path)
+            self._copy_input(
+                input_path,
+                container_name,
+                suffix,
+                verbose=verbose,
+            )
+            run(
+                self.command("start", "--attach", container_name),
+                verbose=verbose,
+            )
+            self._copy_output(
+                container_name,
+                container_output,
+                output_path,
+                verbose=verbose,
+            )
         finally:
-            if created and not keep_container:
+            if created and not keep_work:
                 run(
                     self.command("rm", "--force", container_name),
                     capture_output=True,
                     check=False,
+                    verbose=verbose,
                 )
+            elif created:
+                print(f"Docker work retained in container {container_name}")
 
-    def _copy_input(self, source: Path, container_name: str, suffix: str) -> None:
+    def _copy_input(
+        self,
+        source: Path,
+        container_name: str,
+        suffix: str,
+        *,
+        verbose: bool = False,
+    ) -> None:
         command = self.command("cp", "-", f"{container_name}:/work")
-        print(f"+ {display_command(command)} < {source}", flush=True)
+        print("Copying input to Docker...", flush=True)
+        if verbose:
+            print(f"+ {display_command(command)} < {source}", flush=True)
         process = subprocess.Popen(command, stdin=subprocess.PIPE)
         assert process.stdin is not None
         try:
@@ -215,9 +265,13 @@ class DockerBackend:
         container_name: str,
         container_output: str,
         destination: Path,
+        *,
+        verbose: bool = False,
     ) -> None:
         command = self.command("cp", f"{container_name}:{container_output}", "-")
-        print(f"+ {display_command(command)} > {destination}", flush=True)
+        print("Saving converted video...", flush=True)
+        if verbose:
+            print(f"+ {display_command(command)} > {destination}", flush=True)
         process = subprocess.Popen(command, stdout=subprocess.PIPE)
         assert process.stdout is not None
 

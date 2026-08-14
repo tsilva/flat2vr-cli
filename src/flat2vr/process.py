@@ -22,8 +22,10 @@ def run(
     check: bool = True,
     stdin=None,
     env: dict[str, str] | None = None,
+    verbose: bool = False,
 ) -> subprocess.CompletedProcess[str]:
-    print(f"+ {display_command(command)}", flush=True)
+    if verbose:
+        print(f"+ {display_command(command)}", flush=True)
     result = subprocess.run(
         list(command),
         check=False,

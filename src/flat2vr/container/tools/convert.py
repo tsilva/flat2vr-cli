@@ -19,6 +19,7 @@ DEPTH_PYTHON = DEPTH_ROOT / ".venv" / "bin" / "python"
 SGM_PYTHON = ROOT / "envs" / "sgm" / ".venv" / "bin" / "python"
 MODEL_ROOT = Path(os.environ.get("FLAT2VR_MODEL_DIR", "/models"))
 WORK_ROOT = Path(os.environ.get("FLAT2VR_WORK_DIR", "/work/runs"))
+VERBOSE = False
 
 
 def run(
@@ -27,7 +28,8 @@ def run(
     cwd: Path | None = None,
     env: dict[str, str] | None = None,
 ) -> None:
-    print("+", " ".join(str(part) for part in command), flush=True)
+    if VERBOSE:
+        print("+", " ".join(str(part) for part in command), flush=True)
     subprocess.run(command, cwd=cwd, env=env, check=True)
 
 
@@ -36,31 +38,36 @@ def parse_args() -> argparse.Namespace:
         description="Convert a regular video to Full-SBS HEVC for Meta Quest 3."
     )
     parser.add_argument("input", type=Path)
-    parser.add_argument("output", type=Path, nargs="?")
-    parser.add_argument("--fps", type=int, default=24, choices=(24, 25, 30))
+    parser.add_argument("output", type=Path)
+    parser.add_argument("--fps", type=int, required=True, choices=(24, 25, 30))
     parser.add_argument(
         "--width",
         type=int,
-        default=896,
+        required=True,
         help="Per-eye model width; multiple of 64",
     )
     parser.add_argument(
         "--height",
         type=int,
-        default=512,
+        required=True,
         help="Per-eye model height; multiple of 64",
     )
-    parser.add_argument("--output-height", type=int, default=1024)
-    parser.add_argument("--window-frames", type=int, default=16, choices=range(8, 26))
-    parser.add_argument("--depth-steps", type=int, default=5)
-    parser.add_argument("--disparity", type=float, default=0.05)
-    parser.add_argument("--cq", type=int, default=19, help="NVENC constant-quality value")
+    parser.add_argument("--output-height", type=int, required=True)
+    parser.add_argument(
+        "--window-frames", type=int, required=True, choices=range(8, 26)
+    )
+    parser.add_argument("--depth-steps", type=int, required=True)
+    parser.add_argument("--disparity", type=float, required=True)
+    parser.add_argument(
+        "--cq", type=int, required=True, help="NVENC constant-quality value"
+    )
     parser.add_argument(
         "--encoder",
         choices=("auto", "hevc_nvenc", "libx265"),
-        default="auto",
+        required=True,
     )
     parser.add_argument("--keep-work", action="store_true")
+    parser.add_argument("--verbose", action="store_true")
     return parser.parse_args()
 
 
@@ -69,7 +76,9 @@ def ffconcat_quote(path: Path) -> str:
 
 
 def main() -> None:
+    global VERBOSE
     args = parse_args()
+    VERBOSE = args.verbose
     input_path = args.input.expanduser().resolve()
     if not input_path.is_file():
         raise SystemExit(f"Input file does not exist: {input_path}")
@@ -78,8 +87,7 @@ def main() -> None:
     if not 0.01 <= args.disparity <= 0.08:
         raise SystemExit("--disparity must be between 0.01 and 0.08")
 
-    default_output = Path.cwd() / f"{input_path.stem}_Full_SBS.mp4"
-    output_path = (args.output or default_output).expanduser().resolve()
+    output_path = args.output.expanduser().resolve()
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -92,6 +100,7 @@ def main() -> None:
         directory.mkdir(parents=True, exist_ok=True)
 
     try:
+        print("Preparing video...", flush=True)
         scale_filter = (
             f"fps={args.fps},"
             f"scale={args.width}:{args.height}:force_original_aspect_ratio=decrease:"
@@ -154,6 +163,7 @@ def main() -> None:
         depth_env["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
         depth_env["PYTHONPATH"] = str(DEPTH_ROOT)
 
+        print("Estimating depth...", flush=True)
         run(
             [
                 str(DEPTH_PYTHON),
@@ -185,6 +195,7 @@ def main() -> None:
             env=depth_env,
         )
 
+        print("Synthesizing stereo view...", flush=True)
         run(
             [
                 str(SGM_PYTHON),
@@ -214,6 +225,7 @@ def main() -> None:
             encoding="utf-8",
         )
 
+        print("Encoding Full-SBS video...", flush=True)
         common_encode = [
             "ffmpeg",
             "-hide_banner",
@@ -276,7 +288,10 @@ def main() -> None:
             run(common_encode + selected + common_tail)
         print(f"\nQuest 3 Full-SBS output: {output_path}")
     except Exception:
-        print(f"Work files retained after failure: {run_dir}", file=sys.stderr)
+        if args.keep_work:
+            print(f"Work files retained after failure: {run_dir}", file=sys.stderr)
+        else:
+            shutil.rmtree(run_dir, ignore_errors=True)
         raise
     else:
         if args.keep_work:

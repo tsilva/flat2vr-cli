@@ -1,235 +1,305 @@
-"""Command-line interface for flat2vr."""
+"""One-command interface for converting flat video to stereoscopic video."""
 
 from __future__ import annotations
 
 import argparse
-import os
+from dataclasses import replace
 from pathlib import Path
 import subprocess
 import sys
+import time
 
 from flat2vr import __version__
-from flat2vr.docker_backend import (
-    DEFAULT_IMAGE,
-    DEFAULT_MODEL_VOLUME as DEFAULT_DOCKER_MODEL_VOLUME,
-    DockerBackend,
+from flat2vr.configuration import (
+    Configuration,
+    ConfigurationError,
+    DockerConfiguration,
+    load_configuration,
+    save_configuration,
 )
-from flat2vr.modal_backend import (
-    DEFAULT_APP,
-    DEFAULT_GPU,
-    DEFAULT_JOBS_VOLUME,
-    DEFAULT_MODEL_VOLUME as DEFAULT_MODAL_MODEL_VOLUME,
-    ModalBackend,
-    deploy_modal,
+from flat2vr.docker_backend import DockerBackend
+from flat2vr.modal_backend import ModalBackend
+from flat2vr.options import (
+    PRESETS,
+    STRENGTHS,
+    ConversionOptions,
+    default_output_path,
 )
-from flat2vr.options import ConversionOptions, default_output_path
 from flat2vr.process import CommandError
 
 
-def _conversion_arguments(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--fps", type=int, default=24, choices=(24, 25, 30))
-    parser.add_argument("--width", type=int, default=896, help="per-eye model width")
-    parser.add_argument("--height", type=int, default=512, help="per-eye model height")
-    parser.add_argument("--output-height", type=int, default=1024)
-    parser.add_argument("--window-frames", type=int, default=16)
-    parser.add_argument("--depth-steps", type=int, default=5)
-    parser.add_argument("--disparity", type=float, default=0.05)
-    parser.add_argument("--quality", type=int, default=19, help="HEVC quality, 0-51")
-    parser.add_argument(
+ADVANCED_ARGUMENTS = (
+    ("--fps", {"type": int, "choices": (24, 25, 30), "help": "output FPS"}),
+    ("--width", {"type": int, "help": "per-eye model width; multiple of 64"}),
+    ("--height", {"type": int, "help": "per-eye model height; multiple of 64"}),
+    ("--output-height", {"type": int, "help": "final Full-SBS frame height"}),
+    ("--window-frames", {"type": int, "help": "frames per synthesis window"}),
+    ("--depth-steps", {"type": int, "help": "DepthCrafter denoising steps"}),
+    ("--disparity", {"type": float, "help": "stereo disparity from 0.01 to 0.08"}),
+    ("--quality", {"type": int, "help": "HEVC quality from 0 (best) to 51"}),
+    (
         "--encoder",
-        choices=("auto", "hevc_nvenc", "libx265"),
-        default="auto",
-    )
+        {
+            "choices": ("auto", "hevc_nvenc", "libx265"),
+            "help": "HEVC encoder",
+        },
+    ),
+)
 
 
-def _docker_arguments(parser: argparse.ArgumentParser) -> None:
-    group = parser.add_argument_group("Docker backend")
-    group.add_argument("--docker-host", default=os.environ.get("DOCKER_HOST"))
-    group.add_argument(
-        "--docker-ssh",
-        default=os.environ.get("FLAT2VR_DOCKER_SSH"),
-        metavar="HOST",
-        help="run Docker through ssh HOST (for example beast-3.nord)",
-    )
-    group.add_argument(
-        "--docker-sudo",
-        action="store_true",
-        default=os.environ.get("FLAT2VR_DOCKER_SUDO") == "1",
-        help="run remote Docker as sudo -n docker",
-    )
-    group.add_argument(
-        "--image",
-        default=os.environ.get("FLAT2VR_IMAGE", DEFAULT_IMAGE),
-    )
-    group.add_argument(
-        "--model-volume",
-        default=os.environ.get("FLAT2VR_MODEL_VOLUME", DEFAULT_DOCKER_MODEL_VOLUME),
-    )
-    group.add_argument(
-        "--model-path",
-        default=os.environ.get("FLAT2VR_MODEL_PATH"),
-        help="host path to bind at /models instead of a Docker volume",
-    )
-
-
-def _modal_arguments(
-    parser: argparse.ArgumentParser,
-    *,
-    include_gpu: bool = False,
-) -> None:
-    group = parser.add_argument_group("Modal backend")
-    group.add_argument(
-        "--modal-app",
-        default=os.environ.get("FLAT2VR_MODAL_APP", DEFAULT_APP),
-    )
-    group.add_argument(
-        "--modal-model-volume",
-        default=os.environ.get("FLAT2VR_MODAL_MODEL_VOLUME", DEFAULT_MODAL_MODEL_VOLUME),
-    )
-    group.add_argument(
-        "--modal-jobs-volume",
-        default=os.environ.get("FLAT2VR_MODAL_JOBS_VOLUME", DEFAULT_JOBS_VOLUME),
-    )
-    if include_gpu:
-        group.add_argument(
-            "--modal-gpu",
-            default=os.environ.get("FLAT2VR_MODAL_GPU", DEFAULT_GPU),
-        )
-
-
-def _options(args: argparse.Namespace) -> ConversionOptions:
-    return ConversionOptions(
-        fps=args.fps,
-        width=args.width,
-        height=args.height,
-        output_height=args.output_height,
-        window_frames=args.window_frames,
-        depth_steps=args.depth_steps,
-        disparity=args.disparity,
-        quality=args.quality,
-        encoder=args.encoder,
-    )
-
-
-def _docker(args: argparse.Namespace) -> DockerBackend:
-    return DockerBackend(
-        docker_host=None if args.docker_ssh else args.docker_host,
-        docker_ssh=args.docker_ssh,
-        docker_sudo=args.docker_sudo,
-        image=args.image,
-        model_volume=args.model_volume,
-        model_path=args.model_path,
-    )
-
-
-def _modal_backend(args: argparse.Namespace) -> ModalBackend:
-    return ModalBackend(
-        app_name=args.modal_app,
-        model_volume=args.modal_model_volume,
-        jobs_volume=args.modal_jobs_volume,
-    )
-
-
-def build_parser() -> argparse.ArgumentParser:
+def build_parser(*, advanced: bool = False) -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="flat2vr",
-        description="Convert flat video to Quest-compatible Full-SBS 3D video.",
+        description="Turn a flat video into headset-ready Full-SBS 3D.",
+        epilog=(
+            "examples:\n"
+            "  flat2vr movie.mp4\n"
+            "  flat2vr movie.mp4 --preset best --strength strong\n"
+            "  flat2vr setup\n"
+            "  flat2vr setup docker ssh://gpu.example.com --sudo"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument("input", type=Path, nargs="?", help="video to convert")
+    parser.add_argument("-o", "--output", type=Path, help="output .mp4 path")
+    parser.add_argument(
+        "--preset",
+        choices=tuple(PRESETS),
+        default="balanced",
+        help="speed and output quality (default: balanced)",
+    )
+    parser.add_argument(
+        "--strength",
+        choices=tuple(STRENGTHS),
+        default="normal",
+        help="stereo depth strength (default: normal)",
+    )
+    parser.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="replace an existing output file",
+    )
+    parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help="show commands and detailed errors",
+    )
+    parser.add_argument(
+        "--help-advanced",
+        action="store_true",
+        help="show expert conversion controls",
+    )
+    hidden = None if advanced else argparse.SUPPRESS
+    for flag, keyword_arguments in ADVANCED_ARGUMENTS:
+        arguments = dict(keyword_arguments)
+        if hidden is not None:
+            arguments["help"] = hidden
+        parser.add_argument(flag, default=None, **arguments)
+    parser.add_argument(
+        "--keep-work",
+        action="store_true",
+        help=(
+            "retain backend work files for diagnosis"
+            if advanced
+            else argparse.SUPPRESS
+        ),
     )
     parser.add_argument(
         "--version",
         action="version",
         version=f"flat2vr {__version__}",
     )
-    subparsers = parser.add_subparsers(dest="command", required=True)
-
-    convert = subparsers.add_parser("convert", help="convert a video")
-    convert.add_argument("input", type=Path)
-    convert.add_argument("-o", "--output", type=Path)
-    convert.add_argument(
-        "--backend",
-        choices=("docker", "modal"),
-        default=os.environ.get("FLAT2VR_BACKEND", "docker"),
-    )
-    convert.add_argument(
-        "--rebuild",
-        action="store_true",
-        help="rebuild the Docker image",
-    )
-    convert.add_argument("--keep-container", action="store_true")
-    _conversion_arguments(convert)
-    _docker_arguments(convert)
-    _modal_arguments(convert)
-
-    build = subparsers.add_parser("build", help="build the GPU Docker image")
-    build.add_argument(
-        "--rebuild",
-        action="store_true",
-        help="disable Docker's build cache",
-    )
-    _docker_arguments(build)
-
-    doctor = subparsers.add_parser("doctor", help="check a backend")
-    doctor.add_argument(
-        "--backend",
-        choices=("docker", "modal"),
-        default=os.environ.get("FLAT2VR_BACKEND", "docker"),
-    )
-    _docker_arguments(doctor)
-    _modal_arguments(doctor)
-
-    modal_parser = subparsers.add_parser("modal", help="manage the Modal deployment")
-    modal_commands = modal_parser.add_subparsers(dest="modal_command", required=True)
-    deploy = modal_commands.add_parser("deploy", help="build and deploy the Modal app")
-    _modal_arguments(deploy, include_gpu=True)
     return parser
 
 
-def dispatch(args: argparse.Namespace) -> None:
-    if args.command == "convert":
-        input_path = args.input.expanduser().resolve()
-        output_path = (
-            args.output or default_output_path(input_path)
-        ).expanduser().resolve()
-        options = _options(args)
-        if args.backend == "docker":
-            _docker(args).convert(
-                input_path,
-                output_path,
-                options,
-                rebuild=args.rebuild,
-                keep_container=args.keep_container,
-            )
-        else:
-            _modal_backend(args).convert(input_path, output_path, options)
-        print(f"Created {output_path}")
-    elif args.command == "build":
-        _docker(args).build(rebuild=args.rebuild)
-    elif args.command == "doctor":
-        (_docker(args) if args.backend == "docker" else _modal_backend(args)).doctor()
-    elif args.command == "modal" and args.modal_command == "deploy":
-        deploy_modal(
-            app_name=args.modal_app,
-            model_volume=args.modal_model_volume,
-            jobs_volume=args.modal_jobs_volume,
-            gpu=args.modal_gpu,
+def build_setup_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="flat2vr setup",
+        description="Set up or repair the selected GPU backend.",
+    )
+    parser.add_argument("backend", nargs="?", choices=("modal", "docker"))
+    parser.add_argument(
+        "target",
+        nargs="?",
+        help="Docker ssh:// or daemon URL; omit for the normal Docker context",
+    )
+    parser.add_argument("--gpu", help="Modal GPU type (default: L40S)")
+    parser.add_argument(
+        "--sudo",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="use sudo -n for an SSH Docker target",
+    )
+    parser.add_argument("--model-path", help="host model cache path for Docker")
+    parser.add_argument(
+        "--clear-model-path",
+        action="store_true",
+        help="return Docker to its managed model volume",
+    )
+    parser.add_argument(
+        "--rebuild",
+        action="store_true",
+        help="rebuild the Docker image without cache",
+    )
+    parser.add_argument("--verbose", action="store_true", help="show backend commands")
+    return parser
+
+
+def _conversion_options(args: argparse.Namespace) -> ConversionOptions:
+    overrides = {
+        name.removeprefix("--").replace("-", "_"): getattr(
+            args, name.removeprefix("--").replace("-", "_")
         )
-    else:  # pragma: no cover - argparse ensures this cannot occur
-        raise AssertionError(f"unhandled command: {args.command}")
+        for name, _ in ADVANCED_ARGUMENTS
+    }
+    return ConversionOptions.from_profile(
+        preset=args.preset,
+        strength=args.strength,
+        overrides=overrides,
+    )
 
 
-def main() -> None:
+def _docker_backend(configuration: DockerConfiguration) -> DockerBackend:
+    if (configuration.target or "").startswith("ssh://"):
+        return DockerBackend(
+            docker_ssh=configuration.target.removeprefix("ssh://"),
+            docker_sudo=configuration.sudo,
+            model_path=configuration.model_path,
+        )
+    return DockerBackend(
+        docker_host=configuration.target,
+        model_path=configuration.model_path,
+    )
+
+
+def _confirm_first_modal_setup() -> None:
+    if not sys.stdin.isatty():
+        raise RuntimeError(
+            "Flat2VR is not set up; run `flat2vr setup modal` before converting "
+            "in a non-interactive environment"
+        )
+    print(
+        "First-time setup uses your Modal account. Your video will be uploaded "
+        "there and GPU charges may apply."
+    )
+    answer = input("Continue? [y/N] ").strip().lower()
+    if answer not in ("y", "yes"):
+        raise RuntimeError("setup cancelled")
+
+
+def dispatch_conversion(args: argparse.Namespace) -> Path | None:
+    if args.help_advanced:
+        build_parser(advanced=True).print_help()
+        return None
+    if args.input is None:
+        build_parser().print_help()
+        return None
+
+    input_path = args.input.expanduser().resolve()
+    if not input_path.is_file():
+        raise FileNotFoundError(f"input video does not exist: {input_path}")
+    output_path = (args.output or default_output_path(input_path)).expanduser().resolve()
+    if output_path == input_path:
+        raise ValueError("output path must be different from the input video")
+    if output_path.suffix.lower() != ".mp4":
+        raise ValueError("output path must end in .mp4")
+    if output_path.exists() and not args.overwrite:
+        raise FileExistsError(
+            f"output already exists: {output_path}; pass --overwrite to replace it"
+        )
+    options = _conversion_options(args)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    saved = load_configuration()
+    configuration = saved or Configuration()
+    started = time.monotonic()
+    if configuration.backend == "modal":
+        if saved is None:
+            _confirm_first_modal_setup()
+        backend = ModalBackend(gpu=configuration.modal_gpu)
+        backend.setup(interactive=saved is None, verbose=args.verbose)
+        if saved is None:
+            save_configuration(configuration)
+        backend.convert(
+            input_path,
+            output_path,
+            options,
+            verbose=args.verbose,
+            keep_work=args.keep_work,
+        )
+    else:
+        _docker_backend(configuration.docker).convert(
+            input_path,
+            output_path,
+            options,
+            verbose=args.verbose,
+            keep_work=args.keep_work,
+        )
+    elapsed = time.monotonic() - started
+    print(f"Created {output_path} in {elapsed / 60:.1f} minutes")
+    return output_path
+
+
+def dispatch_setup(args: argparse.Namespace) -> Configuration:
+    current = load_configuration()
+    selected_backend = args.backend or (current.backend if current else "modal")
+    base = current or Configuration()
+
+    if selected_backend == "modal":
+        if args.target is not None or args.sudo is not None or args.model_path is not None:
+            raise ValueError("Docker target options require `flat2vr setup docker`")
+        if args.clear_model_path or args.rebuild:
+            raise ValueError("Docker maintenance options require `flat2vr setup docker`")
+        gpu = args.gpu or base.modal_gpu
+        result = replace(base, backend="modal", modal_gpu=gpu)
+        ModalBackend(gpu=gpu).setup(
+            interactive=sys.stdin.isatty(),
+            verbose=args.verbose,
+        )
+    else:
+        if args.gpu:
+            raise ValueError("--gpu requires `flat2vr setup modal`")
+        if args.clear_model_path and args.model_path is not None:
+            raise ValueError("use either --model-path or --clear-model-path, not both")
+        old = base.docker
+        target = args.target if args.target is not None else old.target
+        sudo = args.sudo if args.sudo is not None else old.sudo
+        if args.clear_model_path:
+            model_path = None
+        else:
+            model_path = args.model_path if args.model_path is not None else old.model_path
+        docker = DockerConfiguration(target=target, sudo=sudo, model_path=model_path)
+        docker.validate()
+        result = replace(base, backend="docker", docker=docker)
+        _docker_backend(docker).setup(rebuild=args.rebuild, verbose=args.verbose)
+
+    path = save_configuration(result)
+    print(f"Saved setup in {path}")
+    return result
+
+
+def main(argv: list[str] | None = None) -> None:
+    arguments = list(sys.argv[1:] if argv is None else argv)
+    verbose = "--verbose" in arguments
     try:
-        dispatch(build_parser().parse_args())
+        if arguments and arguments[0] == "setup":
+            dispatch_setup(build_setup_parser().parse_args(arguments[1:]))
+        else:
+            dispatch_conversion(build_parser().parse_args(arguments))
     except KeyboardInterrupt:
         print("Interrupted", file=sys.stderr)
         raise SystemExit(130) from None
     except (
         CommandError,
+        ConfigurationError,
+        FileExistsError,
         FileNotFoundError,
         RuntimeError,
         ValueError,
         subprocess.CalledProcessError,
     ) as error:
+        if verbose:
+            raise
         print(f"flat2vr: error: {error}", file=sys.stderr)
         raise SystemExit(1) from None
 
