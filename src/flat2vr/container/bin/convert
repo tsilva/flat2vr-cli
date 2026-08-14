@@ -1,0 +1,5 @@
+#!/bin/sh
+set -eu
+
+/opt/flat2vr/envs/sgm/.venv/bin/python /opt/flat2vr/tools/ensure_models.py
+exec /opt/flat2vr/envs/sgm/.venv/bin/python /opt/flat2vr/tools/convert.py "$@"

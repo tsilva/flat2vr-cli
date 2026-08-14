@@ -1,0 +1,50 @@
+diff --git a/m2svid/models_for_sgm/m2svid_model.py b/m2svid/models_for_sgm/m2svid_model.py
+index c13a723..7737f24 100644
+--- a/m2svid/models_for_sgm/m2svid_model.py
++++ b/m2svid/models_for_sgm/m2svid_model.py
+@@ -88,9 +88,10 @@ class VideoLDM(DiffusionEngine):
+         self.gt_video_sampling_exp_scale = gt_video_sampling_exp_scale
+         self.cond_randomly_gt_frames_in_reprojected_video = cond_randomly_gt_frames_in_reprojected_video
+ 
+-        self.additional_metric = {
+-            'lpips':  LPIPS().eval()
+-        }
++        # Evaluation metrics are large and unused during inference. Construct
++        # LPIPS lazily in test_step instead of downloading VGG weights whenever
++        # an inference-only model is initialized.
++        self.additional_metric = {}
+ 
+     def init_from_ckpt(
+         self,
+@@ -261,6 +262,7 @@ class VideoLDM(DiffusionEngine):
+         batch: Dict,
+         ucg_keys: List[str] = None,
+         do_not_decode = False,
++        offload_before_decode = False,
+         **kwargs,
+     ) -> Dict:
+         conditioner_input_keys = [e.input_key for e in self.conditioner.embedders]
+@@ -314,6 +316,14 @@ class VideoLDM(DiffusionEngine):
+                 samples = self.sampler(denoiser, randn, cond=c, uc=uc, num_video_frames=batch["num_video_frames"])
+ 
+         if not do_not_decode:
++            # On 24 GB consumer GPUs the denoiser leaves several GiB in the
++            # CUDA caching allocator. The denoiser and conditioning encoders
++            # are no longer needed once latents exist, so optionally move them
++            # to CPU before the VAE's large temporal decode allocation.
++            if offload_before_decode:
++                self.model.cpu()
++                self.conditioner.cpu()
++            torch.cuda.empty_cache()
+             samples = self.decode_first_stage(samples.half(), num_video_frames=batch["num_video_frames"])
+             samples = einops.rearrange(samples, '(b t) c h w -> b c t h w', t=batch["num_video_frames"])
+ 
+@@ -354,6 +364,8 @@ class VideoLDM(DiffusionEngine):
+             (gt_video_reprojected, generated_video_reprojected, None, '_reprojected_only'),
+         ]
+ 
++        if 'lpips' not in self.additional_metric:
++            self.additional_metric['lpips'] = LPIPS().eval()
+         lpips = self.additional_metric['lpips'].to('cuda')
+ 
+         for ref_video, gen_video, mask, suffix in triplets:
