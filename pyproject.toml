@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "flat2vr-cli"
-version = "0.1.1"
+version = "0.1.2"
 description = "Convert ordinary video to stereoscopic Full-SBS video on Modal or any GPU Docker host."
 readme = "README.md"
 requires-python = ">=3.11"
