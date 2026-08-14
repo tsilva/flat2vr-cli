@@ -70,9 +70,14 @@ REQUIRED_WHEEL_FILES = {
 }
 
 
-def run(command: list[str], *, cwd: Path | None = None) -> None:
+def run(
+    command: list[str],
+    *,
+    cwd: Path | None = None,
+    env: dict[str, str] | None = None,
+) -> None:
     print("+", shlex.join(command), flush=True)
-    subprocess.run(command, cwd=cwd, check=True)
+    subprocess.run(command, cwd=cwd, env=env, check=True)
 
 
 def read_toml(path: Path) -> dict[str, object]:
@@ -311,6 +316,34 @@ def check_pypi(version: str) -> None:
     print(json.dumps({"package": PACKAGE_NAME, "version": version, "unused": True}))
 
 
+def source_gates() -> None:
+    uv = shutil.which("uv")
+    if uv is None:
+        raise SystemExit("uv is required for release source gates")
+    with tempfile.TemporaryDirectory(prefix="flat2vr-release-uv-config-") as config:
+        env = os.environ.copy()
+        env["XDG_CONFIG_HOME"] = config
+        for command in (
+            [uv, "lock", "--check"],
+            [uv, "sync", "--frozen"],
+            [uv, "run", "--frozen", "python", "-m", "compileall", "-q", "src"],
+            [
+                uv,
+                "run",
+                "--frozen",
+                "python",
+                "-m",
+                "unittest",
+                "discover",
+                "-s",
+                "tests",
+                "-v",
+            ],
+            [uv, "run", "--frozen", "flat2vr", "--help"],
+        ):
+            run(command, cwd=REPO_ROOT, env=env)
+
+
 def contaminated(member_name: str) -> bool:
     parts = set(PurePosixPath(member_name).parts)
     return bool(parts & CONTAMINATION_PARTS) or member_name.endswith((".pyc", ".pyo"))
@@ -512,6 +545,8 @@ def parser() -> argparse.ArgumentParser:
     pypi = commands.add_parser("check-pypi")
     pypi.add_argument("--version", required=True)
 
+    commands.add_parser("source-gates")
+
     candidate = commands.add_parser("build")
     candidate.add_argument("--version", required=True)
     candidate.add_argument("--out-dir", type=Path, required=True)
@@ -535,6 +570,8 @@ def main() -> None:
         prepare_version(args.to, args.write)
     elif args.command == "check-pypi":
         check_pypi(args.version)
+    elif args.command == "source-gates":
+        source_gates()
     elif args.command == "build":
         build(args.version, args.out_dir if args.out_dir.is_absolute() else REPO_ROOT / args.out_dir)
     elif args.command == "audit":

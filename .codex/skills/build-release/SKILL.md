@@ -38,12 +38,12 @@ publication. Do not write an automatic version bump onto a dirty tree.
 2. Run the locked source gates:
 
 ```bash
-uv lock --check
-uv sync --frozen
-uv run --frozen python -m compileall -q src
-uv run --frozen python -m unittest discover -s tests -v
-uv run --frozen flat2vr --help
+python3 .codex/skills/build-release/scripts/release_build.py source-gates
 ```
+
+The helper isolates these gates from user-level uv configuration, then runs
+`uv lock --check`, `uv sync --frozen`, source compilation, unit tests, and the
+CLI help smoke test against the project-owned configuration and lockfile.
 
 3. Confirm the selected version is unused and build into a fresh directory:
 

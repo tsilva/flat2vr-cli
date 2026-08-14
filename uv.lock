@@ -9,14 +9,6 @@ resolution-markers = [
 [options]
 exclude-newer = "2026-08-07T00:00:00Z"
 
-[options.exclude-newer-package]
-stable-retro-turbo = "2026-08-13T20:30:00Z"
-vizdoom-turbo = "2026-08-13T20:30:00Z"
-gradoom = "2026-08-13T20:30:00Z"
-supermariobrosnes-turbo = "2026-08-13T20:30:00Z"
-breakout-turbo-env = "2026-08-13T20:30:00Z"
-gradlab = false
-
 [manifest]
 constraints = [
     { name = "guardrails-ai", specifier = "!=0.10.1" },

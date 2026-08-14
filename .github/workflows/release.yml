@@ -78,11 +78,9 @@ jobs:
           check-pypi --version "${{ steps.version.outputs.version }}"
 
       - name: Run source checks
-        run: |
-          uv lock --check
-          uv run --frozen python -m compileall -q src
-          uv run --frozen python -m unittest discover -s tests -v
-          uv run --frozen flat2vr --help
+        run: >-
+          python3 .codex/skills/build-release/scripts/release_build.py
+          source-gates
 
       - name: Build and audit release distributions
         run: >-

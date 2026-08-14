@@ -21,6 +21,7 @@ packages = ["src/flat2vr"]
 
 [tool.uv]
 exclude-newer = "2026-08-07T00:00:00Z"
+exclude-newer-package = {}
 constraint-dependencies = [
   "mistralai!=2.4.6",
   "guardrails-ai!=0.10.1",
