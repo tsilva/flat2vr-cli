@@ -1,0 +1,4 @@
+interface:
+  display_name: "Build Release"
+  short_description: "Build and publish validated flat2vr releases"
+  default_prompt: "Use $build-release to build or publish a flat2vr PyPI release and verify it."
